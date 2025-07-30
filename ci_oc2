@@ -1,0 +1,283 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import copy
+
+class NeuralNetwork:
+    def __init__(self, layers, learning_rate=0.1, momentum_rate=0.9, activation='sigmoid'):
+        self.layers = layers
+        self.learning_rate = learning_rate
+        self.momentum_rate = momentum_rate
+        self.activation_name = activation
+        self.weights, self.delta_weights, self.biases, self.delta_biases, self.local_gradients = self._initialize_parameters(layers)
+        self.outputs = []
+
+    def _initialize_parameters(self, layers):
+        weights = []
+        delta_weights = []
+        biases = []
+        delta_biases = []
+        local_gradients = [np.zeros(layers[0])]
+        for i in range(1, len(layers)):
+            # ใช้การสุ่ม weight แบบ -1 ถึง 1 เพื่อให้ weight มีค่าบวกลบ
+            weights.append(np.random.uniform(-1, 1, (layers[i], layers[i - 1])))
+            delta_weights.append(np.zeros((layers[i], layers[i - 1])))
+            biases.append(np.random.uniform(-1, 1, layers[i]))
+            delta_biases.append(np.zeros(layers[i]))
+            local_gradients.append(np.zeros(layers[i]))
+        return weights, delta_weights, biases, delta_biases, local_gradients
+
+    def _activate(self, x):
+        if self.activation_name == 'sigmoid':
+            return 1 / (1 + np.exp(-x))
+        elif self.activation_name == 'relu':
+            return np.maximum(0, x)
+        elif self.activation_name == 'tanh':
+            return np.tanh(x)
+        elif self.activation_name == 'linear':
+            return x
+        else:
+            raise ValueError("Unknown activation function")
+
+    def _activate_derivative(self, activated_x):
+        if self.activation_name == 'sigmoid':
+            return activated_x * (1 - activated_x)
+        elif self.activation_name == 'relu':
+            return np.where(activated_x > 0, 1, 0)
+        elif self.activation_name == 'tanh':
+            return 1 - activated_x ** 2
+        elif self.activation_name == 'linear':
+            return np.ones_like(activated_x)
+        else:
+            raise ValueError("Unknown activation function")
+
+    def forward_propagation(self, input_vector):
+        self.outputs = [input_vector]
+        for i in range(len(self.layers) - 1):
+            z = self.weights[i] @ self.outputs[i] + self.biases[i]
+            a = self._activate(z)
+            self.outputs.append(a)
+
+    def backward_propagation(self, target_vector):
+        error = None
+        for idx, layer_index in enumerate(reversed(range(1, len(self.layers)))):
+            if idx == 0:
+                error = target_vector - self.outputs[layer_index]
+                self.local_gradients[layer_index] = error * self._activate_derivative(self.outputs[layer_index])
+            else:
+                next_grad = self.local_gradients[layer_index + 1]
+                self.local_gradients[layer_index] = self._activate_derivative(self.outputs[layer_index]) * (self.weights[layer_index].T @ next_grad)
+
+            self.delta_weights[layer_index - 1] = (self.momentum_rate * self.delta_weights[layer_index - 1] +
+                                                   self.learning_rate * np.outer(self.local_gradients[layer_index], self.outputs[layer_index - 1]))
+            self.delta_biases[layer_index - 1] = (self.momentum_rate * self.delta_biases[layer_index - 1] +
+                                                  self.learning_rate * self.local_gradients[layer_index])
+
+            self.weights[layer_index - 1] += self.delta_weights[layer_index - 1]
+            self.biases[layer_index - 1] += self.delta_biases[layer_index - 1]
+
+        return np.sum(error ** 2) / 2
+
+    def train(self, input_data, target_data, max_epochs=1000, target_error=0.001):
+        epoch = 0
+        errors = []
+        current_error = float('inf')
+
+        while epoch < max_epochs and current_error > target_error:
+            current_error = 0
+            for inp, tgt in zip(input_data, target_data):
+                self.forward_propagation(inp)
+                current_error += self.backward_propagation(tgt)
+            current_error /= len(input_data)
+            errors.append(current_error)
+            epoch += 1
+            # ไม่ต้องพิมพ์ทุก epoch จะช้า อาจพิมพ์ทุก 100 epoch
+            if epoch % 100 == 0 or epoch == 1:
+                print(f"Epoch {epoch} - MSE: {current_error:.6f}")
+
+        return errors
+
+    def evaluate(self, input_data, target_data, mode='classification'):
+        predictions = []
+        for inp in input_data:
+            self.forward_propagation(inp)
+            predictions.append(self.outputs[-1])
+
+        if mode == 'classification':
+            predicted_labels = []
+            true_labels = []
+            for pred, true in zip(predictions, target_data):
+                pred_label = 0 if pred[0] > pred[1] else 1
+                true_label = 0 if true[0] > true[1] else 1
+                predicted_labels.append(pred_label)
+                true_labels.append(true_label)
+
+            TP = sum((p == 1 and t == 1) for p, t in zip(predicted_labels, true_labels))
+            TN = sum((p == 0 and t == 0) for p, t in zip(predicted_labels, true_labels))
+            FP = sum((p == 1 and t == 0) for p, t in zip(predicted_labels, true_labels))
+            FN = sum((p == 0 and t == 1) for p, t in zip(predicted_labels, true_labels))
+
+            accuracy = (TP + TN) / len(true_labels) * 100
+
+            print(f"Test Accuracy: {accuracy:.2f}%")
+            print("\nConfusion Matrix (numeric):")
+            print(f"TP: {TP} | FN: {FN}")
+            print(f"FP: {FP} | TN: {TN}")
+            return accuracy
+
+        else:
+            predicted = [p[0] for p in predictions]
+            true = target_data
+            mse = sum((p - t) ** 2 / 2 for p, t in zip(predicted, true)) / len(predicted)
+            print(f"Test MSE: {mse:.6f}")
+
+            samples = list(range(len(true)))
+            width = 0.25
+            x = np.arange(len(samples))
+
+            plt.bar(x, predicted, width, label='Predicted', color='blue')
+            plt.bar(x + width, true, width, label='True', color='orange')
+            errors = [abs(p - t) for p, t in zip(predicted, true)]
+            plt.bar(x + 2 * width, errors, width, label='Error', color='red')
+
+            plt.xlabel("Sample")
+            plt.ylabel("Output / Error")
+            plt.title("Evaluation: Predicted vs True Outputs")
+            plt.xticks(x + width, samples)
+            plt.legend()
+            plt.show()
+            return None
+
+
+def load_regression_data(filename='Flood_dataset.txt'):
+    data = []
+    with open(filename) as f:
+        lines = f.readlines()[2:]
+        for line in lines:
+            data.append([float(x) for x in line.split()])
+    data = np.array(data)
+    np.random.shuffle(data)
+
+    min_vals = np.min(data, axis=0)
+    max_vals = np.max(data, axis=0)
+    epsilon = 1e-8
+    normalized_data = (data - min_vals) / (max_vals - min_vals + epsilon)
+
+    inputs = normalized_data[:, :-1]
+    outputs = normalized_data[:, -1]
+    return inputs.tolist(), outputs.tolist()
+
+
+def load_classification_data(filename='cross.pat'):
+    data = []
+    with open(filename) as f:
+        lines = f.readlines()
+        for i in range(1, len(lines), 3):
+            input_line = [float(x) for x in lines[i].strip().split()]
+            output_line = [float(x) for x in lines[i + 1].strip().split()]
+            data.append(input_line + output_line)
+    data = np.array(data)
+    np.random.shuffle(data)
+
+    inputs = data[:, :-2]
+    outputs = data[:, -2:]
+    return inputs.tolist(), outputs.tolist()
+
+
+def split_k_fold(data, k=10):
+    if k == 1:
+        return [data], [data]
+    n = len(data)
+    fold_size = n // k
+    train_sets = []
+    test_sets = []
+    for i in range(k):
+        test = data[i * fold_size:(i + 1) * fold_size]
+        train = data[:i * fold_size] + data[(i + 1) * fold_size:]
+        train_sets.append(train)
+        test_sets.append(test)
+    return train_sets, test_sets
+
+
+if __name__ == "__main__":
+    # เลือกโหมดข้อมูล
+    while True:
+        data_mode = input("Select data mode (regression/classification): ").strip().lower()
+        if data_mode in ['regression', 'classification']:
+            break
+        print("Invalid input! Please type 'regression' or 'classification'.")
+
+    network_layers = {
+        "regression": [8, 16, 1],
+        "classification": [2, 16, 2]
+    }
+
+    default_params = {
+        "k_folds": 10,
+        "learning_rate": 0.3,
+        "momentum_rate": 0.8,
+        "max_epochs": 1000,
+        "target_error": 0.001,
+        "activation_func": 'sigmoid',
+        "num_inits": 3,
+        "hidden_nodes_options": [8, 16, 32]
+    }
+
+    print(f"\nDefault parameters:")
+    for k, v in default_params.items():
+        print(f"{k} = {v}")
+
+    change_defaults = input("Change default parameters? (y/n): ").lower()
+    if change_defaults == 'y':
+        val = input(f"Enter k folds (default {default_params['k_folds']}): ").strip()
+        if val: default_params['k_folds'] = int(val)
+        val = input(f"Enter learning rate (default {default_params['learning_rate']}): ").strip()
+        if val: default_params['learning_rate'] = float(val)
+        val = input(f"Enter momentum rate (default {default_params['momentum_rate']}): ").strip()
+        if val: default_params['momentum_rate'] = float(val)
+        val = input(f"Enter max epochs (default {default_params['max_epochs']}): ").strip()
+        if val: default_params['max_epochs'] = int(val)
+        val = input(f"Enter target error (default {default_params['target_error']}): ").strip()
+        if val: default_params['target_error'] = float(val)
+        val = input(f"Enter activation function (sigmoid/relu/tanh/linear) (default {default_params['activation_func']}): ").strip().lower()
+        if val in ['sigmoid', 'relu', 'tanh', 'linear']:
+            default_params['activation_func'] = val
+
+    # โหลดข้อมูลตามโหมด
+    if data_mode == 'regression':
+        inputs, targets = load_regression_data()
+    else:
+        inputs, targets = load_classification_data()
+
+    # ทำ k-fold split
+    input_train_folds, input_test_folds = split_k_fold(inputs, default_params['k_folds'])
+    target_train_folds, target_test_folds = split_k_fold(targets, default_params['k_folds'])
+
+    # ทดลองหลายๆ hidden nodes, learning rate, momentum rate และ random init
+    learning_rates = [default_params['learning_rate']]
+    momentum_rates = [default_params['momentum_rate']]
+    hidden_nodes_options = default_params['hidden_nodes_options']
+    num_inits = default_params['num_inits']
+
+    for hn in hidden_nodes_options:
+        for lr in learning_rates:
+            for mom in momentum_rates:
+                accs_all_inits = []
+                print(f"\n=== Testing hidden nodes={hn}, learning rate={lr}, momentum={mom} ===")
+                for init_run in range(num_inits):
+                    print(f"\n-- Initialization run {init_run+1} --")
+                    layers = [8, hn, 1] if data_mode == 'regression' else [2, hn, 2]
+                    accs = []
+                    for fold in range(default_params['k_folds']):
+                        nn = NeuralNetwork(layers, learning_rate=lr, momentum_rate=mom, activation=default_params['activation_func'])
+                        nn.train(input_train_folds[fold], target_train_folds[fold],
+                                 max_epochs=default_params['max_epochs'], target_error=default_params['target_error'])
+                        acc = nn.evaluate(input_test_folds[fold], target_test_folds[fold], mode=data_mode)
+                        if acc is not None:
+                            accs.append(acc)
+                    if accs:
+                        mean_acc = np.mean(accs)
+                        print(f"Fold average accuracy: {mean_acc:.2f}%")
+                        accs_all_inits.append(mean_acc)
+                if accs_all_inits:
+                    print(f"\nOverall average accuracy for hidden nodes={hn}, lr={lr}, mom={mom}: {np.mean(accs_all_inits):.2f}%")
+                    print(f"Standard deviation: {np.std(accs_all_inits):.2f}%")
